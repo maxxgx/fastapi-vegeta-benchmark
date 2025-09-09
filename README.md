@@ -58,8 +58,7 @@ The benchmark automatically discovers and tests all endpoints in `bench_endpoint
 |----------|-------------|----------|
 | `get_item_async` | Pure async with `aiosqlite` | IO bound operations |
 | `get_item_sync_threadpool` | Sync DB in threadpool | CPU bound operations |
-| `get_item_sync_blocking` | Sync DB blocks event loop | ❌ What NOT to do |
-| `get_item_heavy_async` | Heavy async with multiple queries | Tests I/O bound performance |
+| `get_item_sync_blocking` | Sync DB blocks event loop | ❌ What NOT to do? |
 
 **Auto-discovery**: Add new endpoints to `bench_endpoints.py` and they'll be automatically included in benchmarks!
 
