@@ -37,7 +37,7 @@ async def seed_data() -> dict[str, int]:
 
 
 @bench_router.get("/async/read/{item_id}")
-async def get_item_async(item_id: int, db: Annotated[AsyncSession, Depends(get_async_db_session)]) -> dict:
+async def get_item_async_read(item_id: int, db: Annotated[AsyncSession, Depends(get_async_db_session)]) -> dict:
     """Async endpoint that queries the database."""
     try:
         row = (await db.execute(select(BenchItemDB).where(BenchItemDB.id == item_id))).scalar_one_or_none()
