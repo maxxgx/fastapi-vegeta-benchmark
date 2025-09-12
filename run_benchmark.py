@@ -248,8 +248,8 @@ def main():
     register_cleanup()
     
     parser = argparse.ArgumentParser(description="Clean FastAPI Benchmark with Server Restarts")
-    parser.add_argument("--rates", nargs="+", type=int, default=[1000, 5000, 10000], 
-                       help="Rates to test (default: 1000, 5000, 10000)")
+    parser.add_argument("--rates", nargs="+", type=int, default=[1000, 2000], 
+                       help="Rates to test (default: 1000, 2000)")
     parser.add_argument("--host", default="127.0.0.1", help="Server host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
     parser.add_argument("--duration", default="10s", help="Test duration (default: 10s)")

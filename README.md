@@ -18,17 +18,17 @@ uv sync  # or pip install -e .
 
 ### Run
 ```bash
-# Default: 50, 100, 200 RPS for 10s each
+# Default: 1000, 2000 RPS for 10s each
 python run_benchmark.py
 
 # Custom rates and duration
-python run_benchmark.py --rates 25 50 100 --duration 15s
+python run_benchmark.py --rates 1250 2500 --duration 15s
 
 # Test with multiple workers
-python run_benchmark.py --workers 4 --rates 100 200 300
+python run_benchmark.py --workers 4 --rates 1000
 
 # Test only simple endpoints
-python run_benchmark.py --filter /api/simple --rates 10 20 30
+python run_benchmark.py --filter /api/simple --rates 10
 
 # Test only specific endpoint patterns
 python run_benchmark.py --filter /api/simple/sync --workers 8
@@ -50,7 +50,7 @@ python plot_results.py --output my_report.html
 ```
 
 ### Options
-- `--rates`: RPS to test (default: `50 100 200`)
+- `--rates`: RPS to test (default: `1000 2000`)
 - `--host`: Server host (default: `127.0.0.1`)
 - `--port`: Server port (default: `8000`)
 - `--duration`: Test duration (default: `10s`)
@@ -132,29 +132,19 @@ The benchmark includes comprehensive visualization tools:
 ## Sample Output
 
 ```
-📈 Rate 100 RPS:
-Endpoint                    Target Achieved P50(ms)  P95(ms)  Success% CPU Avg%
-------------------------------------------------------------------------------
-/api/simple/async          100    98.5     3.2      6.1      98.5     28.4    
-/api/simple/sync_threadpool 100    95.2     4.1      8.3      95.2     35.1    
-/api/simple/async_blocking  100    45.3     12.8     25.4     45.3     45.8    
-/api/db/async/read          100    97.8     2.8      5.2      97.8     22.1    
-/api/db/async/write         100    96.4     3.5      6.8      96.4     25.3    
-/api/db/sync_threadpool/read 100   94.7     4.3      8.9      94.7     32.8    
-/api/db/sync_threadpool/write 100  93.1     4.8      9.7      93.1     35.6    
-/api/db/async/blocking/read  100   42.1     15.2     28.9     42.1     48.2    
-/api/db/async/blocking/write 100   40.8     16.1     30.5     40.8     49.7    
+📈 Rate 2000 RPS:
+Endpoint                            Target Achieved P50(ms)  Avg(ms)  P95(ms)  Success% CPU Avg%
+-------------------------------------------------------------------------------------------------
+simple_async                        2000   2000.0   50.3     50.3     51.4     100.0    29.0    
+simple_sync_threadpool              2000   262.9    10000.1  8497.6   10000.1  13.2     38.3    
+simple_async_blocking               2000   12.6     227.5    621.3    1468.1   0.6      0.5     
+get_item_async_read                 2000   2000.0   0.7      4.6      25.0     100.0    66.1    
+update_item_async_write             2000   1843.3   8415.0   6767.4   10000.1  92.2     82.4    
+get_item_sync_threadpool_read       2000   1157.5   345.0    1090.7   5547.5   59.3     93.9    
+update_item_sync_threadpool_write   2000   1393.8   5709.0   4852.7   9465.6   69.7     147.3   
+get_item_async_blocking_read        2000   463.3    62.6     557.3    6146.3   26.2     19.1    
+update_item_async_blocking_write    2000   884.3    5715.9   4773.1   10000.1  44.6     57.1    
 ```
-
-## Expected Results
-
-- **Low loads (< 50 RPS)**: All approaches perform similarly
-- **Medium loads (50-100 RPS)**: Async approaches start showing advantages
-- **High loads (> 100 RPS)**: 
-  - Async endpoints scale best with workers
-  - Sync threadpool approaches scale linearly with workers
-  - Blocking approaches fail to scale regardless of worker count
-  - Write operations typically show more performance differences than read operations
 
 ## Prerequisites
 
