@@ -17,9 +17,75 @@ from typing import Dict, Any, List
 import inspect
 import sys
 import os
+import signal
+import atexit
+import psutil
 
 # Add the app directory to Python path
 sys.path.insert(0, str(Path(__file__).parent / "app"))
+
+# Global process tracking for cleanup
+active_processes = []
+cleanup_done = False
+
+def cleanup_all_processes():
+    """Clean up all tracked processes and orphaned Python processes."""
+    global cleanup_done, active_processes
+    
+    if cleanup_done:
+        return
+    
+    cleanup_done = True
+    print("\n🧹 Cleaning up processes...")
+    
+    # Clean up tracked processes
+    for proc in active_processes:
+        if proc and proc.poll() is None:  # Process is still running
+            try:
+                print(f"  🛑 Terminating process {proc.pid}")
+                proc.terminate()
+                proc.wait(timeout=3)
+            except (subprocess.TimeoutExpired, ProcessLookupError):
+                try:
+                    print(f"  💀 Force killing process {proc.pid}")
+                    proc.kill()
+                except ProcessLookupError:
+                    pass  # Process already dead
+    
+    # Clean up orphaned Python processes from this project
+    try:
+        current_pid = os.getpid()
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if (proc.info['name'] == 'python' and 
+                    proc.info['pid'] != current_pid and
+                    any('fastapi_vegeta_benchmark' in str(cmd) for cmd in proc.info['cmdline'])):
+                    
+                    print(f"  🧹 Cleaning up orphaned process {proc.info['pid']}")
+                    proc.terminate()
+                    proc.wait(timeout=2)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                pass
+    except Exception as e:
+        print(f"  ⚠️  Error during orphan cleanup: {e}")
+    
+    active_processes.clear()
+    print("  ✅ Cleanup complete")
+
+def signal_handler(signum, frame):
+    """Handle interrupt signals gracefully."""
+    print(f"\n🛑 Received signal {signum}, cleaning up...")
+    cleanup_all_processes()
+    sys.exit(0)
+
+def register_cleanup():
+    """Register cleanup handlers."""
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Register cleanup on exit
+    atexit.register(cleanup_all_processes)
 
 def wait_for_server(host: str, port: int, timeout: int = 30) -> bool:
     """Wait for server to be ready."""
@@ -36,21 +102,31 @@ def wait_for_server(host: str, port: int, timeout: int = 30) -> bool:
         time.sleep(1)
     return False
 
-def discover_benchmark_endpoints() -> Dict[str, Dict[str, Any]]:
-    """Discover all benchmark endpoints dynamically."""
+def discover_benchmark_endpoints(path_filter: str = None) -> Dict[str, Dict[str, Any]]:
+    """Discover all benchmark endpoints dynamically with optional path filtering."""
     try:
-        from app.endpoints.bench_endpoints import bench_router
+        from app.main import app
         
         endpoints = {}
-        for route in bench_router.routes:
+        for route in app.routes:
             if hasattr(route, 'endpoint') and hasattr(route, 'path'):
+                # Skip routes that don't have GET or POST methods and special routes
+                if not hasattr(route, 'methods') or not any(method in route.methods for method in ['GET', 'POST']):
+                    continue
+                if route.path in ['/', '/health', '/openapi.json', '/docs', '/docs/oauth2-redirect', '/redoc', '/api/db/seed']:
+                    continue
+                
+                # Apply path filter if provided
+                if path_filter:
+                    if not route.path.startswith(path_filter):
+                        continue
+                
                 func_name = route.endpoint.__name__
-                if func_name.startswith('get_item_'):
-                    endpoints[func_name] = {
-                        'url': route.path,
-                        'method': getattr(route, 'methods', ['GET']),
-                        'function': route.endpoint
-                    }
+                endpoints[func_name] = {
+                    'url': route.path,
+                    'method': getattr(route, 'methods', ['GET']),
+                    'function': route.endpoint
+                }
         
         return endpoints
     except Exception as e:
@@ -134,17 +210,25 @@ def print_progress(samples: List, width: int, desc: str) -> None:
 def start_server(host: str, port: int, workers: int) -> subprocess.Popen:
     """Start a fresh server instance."""
     uvicorn_cmd = [
-        "python", "-m", "uvicorn", "app.main:app", 
+        "uvicorn", "app.main:app", 
         "--host", host, "--port", str(port),
-        "--workers", str(workers)
+        "--workers", str(workers),
+        "--no-access-log",  # Disable access logging for cleaner output
+        "--log-level", "warning"  # Reduce log verbosity
     ]
     
-    return subprocess.Popen(uvicorn_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(uvicorn_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    active_processes.append(proc)
+    return proc
 
 def stop_server(server_proc: subprocess.Popen) -> None:
     """Stop server gracefully, then forcefully if needed."""
     if server_proc is None:
         return
+    
+    # Remove from active processes list
+    if server_proc in active_processes:
+        active_processes.remove(server_proc)
     
     try:
         server_proc.terminate()
@@ -155,16 +239,22 @@ def stop_server(server_proc: subprocess.Popen) -> None:
             server_proc.wait(timeout=2)
         except Exception as e:
             print(f"⚠️  Error killing server: {e}")
+    except ProcessLookupError:
+        pass  # Process already dead
 
 def main():
     """Main benchmark function with clean server restarts."""
+    # Register cleanup handlers
+    register_cleanup()
+    
     parser = argparse.ArgumentParser(description="Clean FastAPI Benchmark with Server Restarts")
-    parser.add_argument("--rates", nargs="+", type=int, default=[50, 100, 200], 
-                       help="Rates to test (default: 50 100 200)")
+    parser.add_argument("--rates", nargs="+", type=int, default=[1000, 5000, 10000], 
+                       help="Rates to test (default: 1000, 5000, 10000)")
     parser.add_argument("--host", default="127.0.0.1", help="Server host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000, help="Server port (default: 8000)")
     parser.add_argument("--duration", default="10s", help="Test duration (default: 10s)")
     parser.add_argument("--workers", type=int, default=1, help="Number of uvicorn worker processes (default: 1)")
+    parser.add_argument("--filter", help="Filter endpoints by path prefix (e.g., '/api/simple' for simple endpoints only)")
     
     args = parser.parse_args()
     
@@ -179,6 +269,8 @@ def main():
     print(f"⏱️  Duration: {duration}")
     print(f"🌐 Server: {host}:{port}")
     print(f"👥 Workers: {args.workers}")
+    if args.filter:
+        print(f"🔍 Filter: {args.filter}")
     
     # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -188,7 +280,9 @@ def main():
     
     # Discover endpoints
     print("🔍 Discovering benchmark endpoints...")
-    discovered_endpoints = discover_benchmark_endpoints()
+    if args.filter:
+        print(f"   Filtering by path prefix: {args.filter}")
+    discovered_endpoints = discover_benchmark_endpoints(args.filter)
     
     if not discovered_endpoints:
         print("❌ No benchmark endpoints found")
@@ -201,7 +295,14 @@ def main():
         target_file = out_dir / f"t_{func_name}.txt"
         # Replace {item_id} with actual item ID
         url = f"http://{host}:{port}{endpoint_info['url']}".replace("{item_id}", "1000")
-        target_file.write_text(f"GET {url}\n")
+        
+        # Determine HTTP method based on endpoint path
+        if '/write/' in endpoint_info['url']:
+            # POST request for write endpoints
+            target_file.write_text(f"POST {url}\n")
+        else:
+            # GET request for read endpoints
+            target_file.write_text(f"GET {url}\n")
     
     # Run benchmarks with server restarts
     total_tests = len(rates) * len(discovered_endpoints)
@@ -235,7 +336,7 @@ def main():
             print(f"  🌱 Seeding data...")
             try:
                 subprocess.run([
-                    "curl", "-X", "POST", f"http://{host}:{port}/api/bench/seed"
+                    "curl", "-X", "POST", f"http://{host}:{port}/api/db/seed"
                 ], check=True, capture_output=True, timeout=10)
                 time.sleep(1)  # Brief pause to ensure DB is ready
             except subprocess.CalledProcessError as e:
@@ -246,9 +347,21 @@ def main():
             # Test endpoint
             print(f"  🧪 Testing endpoint...")
             try:
-                result = subprocess.run([
-                    "curl", "-s", f"http://{host}:{port}{discovered_endpoints[func_name]['url']}"
-                ], capture_output=True, text=True, timeout=5)
+                # Replace {item_id} with actual item ID for testing
+                test_url = f"http://{host}:{port}{discovered_endpoints[func_name]['url']}".replace("{item_id}", "1000")
+                
+                # Determine HTTP method based on endpoint path
+                if '/write/' in discovered_endpoints[func_name]['url']:
+                    # POST request for write endpoints
+                    result = subprocess.run([
+                        "curl", "-s", "-X", "POST", test_url
+                    ], capture_output=True, text=True, timeout=5)
+                else:
+                    # GET request for read endpoints
+                    result = subprocess.run([
+                        "curl", "-s", test_url
+                    ], capture_output=True, text=True, timeout=5)
+                
                 if result.returncode != 0:
                     print(f"  ❌ Endpoint test failed: {result.stderr}")
                     stop_server(server_proc)
@@ -448,6 +561,9 @@ def main():
     print(f"\n🎉 Clean benchmark completed in {time.time() - start_time:.1f}s")
     print(f"📁 Results directory: {out_dir}")
     print(f"📊 Generate interactive HTML report: `python plot_results.py`")
+    
+    # Final cleanup
+    cleanup_all_processes()
 
 if __name__ == "__main__":
     main()

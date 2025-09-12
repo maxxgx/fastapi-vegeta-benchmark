@@ -1,60 +1,88 @@
-"""Database engine configuration for benchmark app."""
+# Copyright (C) 2025 Intel Corporation
+# SPDX-License-Identifier: Apache-2.0
 
-import os
-from contextlib import contextmanager
-from typing import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import asynccontextmanager, contextmanager
+from sqlite3 import Connection
+from typing import Any
 
-from sqlalchemy import create_engine
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.engine import Engine
+from sqlalchemy.engine.create import create_engine, event
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm.session import Session, sessionmaker
+from sqlalchemy.pool.impl import NullPool
 
 from .schema import Base
 
-# Database URL - use a common SQLite file for both async and sync
 DATABASE_URL = "sqlite:///./.benchmark.db"
 ASYNC_DATABASE_URL = "sqlite+aiosqlite:///./.benchmark.db"
 
-# Create engines
+async_engine = create_async_engine(ASYNC_DATABASE_URL, echo=False)
+async_session = async_sessionmaker(async_engine, expire_on_commit=False)
+
 sync_engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 30},
+    # Using NullPool to disable connection pooling, which is necessary for SQLite when using multiprocessing
+    # https://docs.sqlalchemy.org/en/20/core/pooling.html#using-connection-pools-with-multiprocessing-or-os-fork
+    poolclass=NullPool,
     echo=False,
-    # Enable WAL mode for better concurrency
-    pool_pre_ping=True,
 )
-
-async_engine = create_async_engine(
-    ASYNC_DATABASE_URL,
-    echo=False,
-    pool_pre_ping=True,
-)
-
-# Create session makers
-SyncSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
-AsyncSessionLocal = async_sessionmaker(
-    class_=AsyncSession,
-    autocommit=False,
-    autoflush=False,
-    bind=async_engine,
-)
+sync_session = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
 
 
-def init_models():
-    """Initialize database tables."""
-    Base.metadata.create_all(bind=sync_engine)
+@event.listens_for(Engine, "connect")
+def set_sqlite_pragma(dbapi_connection: Connection, _: Any) -> None:
+    """Enable foreign key support for SQLite."""
+    # https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#foreign-key-support
+    # SQLAlchemy's event system does not directly expose async version
+    # https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html#using-events-with-the-asyncio-extension
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
+# @asynccontextmanager
+async def get_async_db_session() -> AsyncGenerator[AsyncSession, Any]:
+    """Get a database session.
+
+    To be used for dependency injection.
+    """
+    async with async_session() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@asynccontextmanager
+async def get_async_db_session_ctx() -> AsyncGenerator[AsyncSession, Any]:
+    """Get a database session for direct async context manager usage."""
+    async with async_session() as session:
+        try:
+            yield session
+        except Exception:
+            await session.rollback()
+            raise
 
 
 @contextmanager
-def get_sync_db_session() -> Generator:
-    """Get synchronous database session."""
-    session = SyncSessionLocal()
+def get_sync_db_session() -> Iterator[Session]:
+    """Context manager to get a database session."""
+    db = sync_session()
     try:
-        yield session
+        yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
-        session.close()
+        db.close()
 
 
-async def get_async_db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Get asynchronous database session."""
-    async with AsyncSessionLocal() as session:
-        yield session
+def init_models() -> None:
+    """Create tables if they don't already exist.
+
+    In a real-life example we would use Alembic to manage migrations.
+    """
+    Base.metadata.create_all(bind=sync_engine)
