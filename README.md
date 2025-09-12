@@ -64,15 +64,9 @@ The benchmark automatically discovers and tests all GET and POST endpoints in yo
 ### Simple Endpoints (`/api/simple/*`)
 | Endpoint | Description | Use Case |
 |----------|-------------|----------|
-<<<<<<< HEAD
-| `get_item_async` | Pure async with `aiosqlite` | IO bound operations |
-| `get_item_sync_threadpool` | Sync DB in threadpool | CPU bound operations |
-| `get_item_sync_blocking` | Sync DB blocks event loop | ❌ What NOT to do? |
-=======
 | `GET /sync_threadpool/{item_id}` | Sync with blocking sleep | Tests worker scaling |
 | `GET /async_blocking/{item_id}` | Async with blocking sleep | ❌ Demonstrates blocking problems |
 | `GET /async/{item_id}` | Async with non-blocking sleep | Tests async concurrency |
->>>>>>> 79c291a (update endpoints)
 
 ### Database Endpoints (`/api/db/*`)
 | Endpoint | Description | Use Case |
@@ -81,8 +75,8 @@ The benchmark automatically discovers and tests all GET and POST endpoints in yo
 | `POST /async/write/{item_id}` | Pure async write with `aiosqlite` | IO bound write operations |
 | `GET /sync_threadpool/read/{item_id}` | Sync DB read in threadpool | CPU bound read operations |
 | `POST /sync_threadpool/write/{item_id}` | Sync DB write in threadpool | CPU bound write operations |
-| `GET /async/blocking/read/{item_id}` | Async with blocking DB read | ❌ What NOT to do |
-| `POST /async/blocking/write/{item_id}` | Async with blocking DB write | ❌ What NOT to do |
+| `GET /async/blocking/read/{item_id}` | Async with blocking DB read | ❌ blocking SQLite read |
+| `POST /async/blocking/write/{item_id}` | Async with blocking DB write | ❌ blocking SQLite write |
 | `POST /seed` | Seed test data | Database initialization |
 
 **Auto-discovery**: Add new endpoints and they'll be automatically included in benchmarks!
